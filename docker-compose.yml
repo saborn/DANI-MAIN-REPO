@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: dani-postgres
+    environment:
+      POSTGRES_DB: dani_messaging
+      POSTGRES_USER: dani_user
+      POSTGRES_PASSWORD: dani_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/01-create-tables.sql:/docker-entrypoint-initdb.d/01-create-tables.sql
+      - ./scripts/02-seed-data.sql:/docker-entrypoint-initdb.d/02-seed-data.sql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: dani-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
