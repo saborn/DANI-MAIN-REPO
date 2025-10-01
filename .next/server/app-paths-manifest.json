@@ -1,5 +1,7 @@
 {
   "/page": "app/page.js",
   "/customer/auth/page": "app/customer/auth/page.js",
-  "/customer/page": "app/customer/page.js"
+  "/customer/page": "app/customer/page.js",
+  "/customer/profile/page": "app/customer/profile/page.js",
+  "/api/customer/profile/route": "app/api/customer/profile/route.js"
 }
