@@ -4,5 +4,6 @@
   "/customer/page": "app/customer/page.js",
   "/customer/profile/page": "app/customer/profile/page.js",
   "/api/customer/profile/route": "app/api/customer/profile/route.js",
-  "/store/auth/page": "app/store/auth/page.js"
+  "/store/auth/page": "app/store/auth/page.js",
+  "/store/page": "app/store/page.js"
 }
