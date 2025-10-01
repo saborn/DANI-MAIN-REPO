@@ -1,0 +1,1 @@
+{"c":["app/layout","app/customer/auth/page","app/customer/page","webpack"],"r":[],"m":["(app-pages-browser)/./components/typing-indicator.tsx","(app-pages-browser)/./hooks/use-typing-indicator.ts","(app-pages-browser)/./lib/mock-db.ts","(app-pages-browser)/./lib/realtime.ts"]}

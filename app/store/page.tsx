@@ -2,120 +2,92 @@
 
 import type React from "react"
 import Link from "next/link"
-import { ProtectedRoute } from "@/components/protected-route"
-
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Send, ImageIcon, MessageCircle, Users, Settings, Search, ArrowLeft, User } from "lucide-react"
-import {
-  mockStores,
-  getMessagesBetween,
-  addMessage,
-  addImageMessage,
-  updateCustomerStatus,
-  getCustomersByStore,
-  getCustomerAnalytics,
-} from "@/lib/mock-db"
-import type { Customer, MessageWithSender } from "@/lib/db-types"
+import { Send, ImageIcon, MessageCircle, Users, Search, ArrowLeft, User } from "lucide-react"
 import { ImageUpload } from "@/components/image-upload"
-import { useRealtime } from "@/lib/realtime"
-import { useTypingIndicator } from "@/hooks/use-typing-indicator"
-import { TypingIndicator } from "@/components/typing-indicator"
+import { ProtectedRoute } from "@/components/protected-route"
+import { useAuth } from "@/lib/auth-context"
+import { supabaseDb } from "@/lib/supabase-db"
+import type { Conversation, Message } from "@/lib/supabase-db"
 
 export default function StoreDashboard() {
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
-  const [messages, setMessages] = useState<MessageWithSender[]>([])
+  const { user } = useAuth()
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [showImageUpload, setShowImageUpload] = useState(false)
-  const [selectedStoreId, setSelectedStoreId] = useState(1)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const realtime = useRealtime()
-
-  const { otherUserTyping, startTyping, stopTyping } = useTypingIndicator(
-    selectedCustomer?.id || 0,
-    selectedStoreId,
-    "store",
-  )
-
-  const currentStore = mockStores.find((s) => s.id === selectedStoreId)
 
   useEffect(() => {
-    const storeCustomers = getCustomersByStore(selectedStoreId)
-    setCustomers(storeCustomers)
-    if (storeCustomers.length > 0 && !selectedCustomer) {
-      setSelectedCustomer(storeCustomers[0])
+    if (user?.id) {
+      loadConversations()
     }
-  }, [selectedStoreId, selectedCustomer])
+  }, [user?.id])
 
   useEffect(() => {
-    if (selectedCustomer) {
-      const customerMessages = getMessagesBetween(selectedCustomer.id, selectedStoreId)
-      setMessages(customerMessages)
-    }
-  }, [selectedCustomer, selectedStoreId])
+    if (selectedConversation?.id) {
+      loadMessages(selectedConversation.id)
 
-  useEffect(() => {
-    const unsubscribe = realtime.subscribe("new_message", (event) => {
-      if (event.type === "new_message" && event.storeId === selectedStoreId) {
-        if (selectedCustomer && event.customerId === selectedCustomer.id) {
-          const updatedMessages = getMessagesBetween(selectedCustomer.id, selectedStoreId)
-          setMessages(updatedMessages)
+      const unsubscribe = supabaseDb.subscribeToMessages(selectedConversation.id, (newMsg) => {
+        setMessages((prev) => [...prev, newMsg])
+        if (newMsg.sender_id !== user?.id) {
+          supabaseDb.markMessagesAsRead(selectedConversation.id, user?.id || "")
         }
+      })
 
-        const updatedCustomers = getCustomersByStore(selectedStoreId)
-        setCustomers(updatedCustomers)
-      }
-    })
-
-    return unsubscribe
-  }, [realtime, selectedCustomer, selectedStoreId])
+      return () => unsubscribe()
+    }
+  }, [selectedConversation?.id, user?.id])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
+  const loadConversations = async () => {
+    if (!user?.id) return
+    const convos = await supabaseDb.getConversationsForBusiness(user.id)
+    setConversations(convos)
+    if (convos.length > 0 && !selectedConversation) {
+      setSelectedConversation(convos[0])
+    }
+  }
+
+  const loadMessages = async (conversationId: string) => {
+    const msgs = await supabaseDb.getMessages(conversationId)
+    setMessages(msgs)
+    if (user?.id) {
+      await supabaseDb.markMessagesAsRead(conversationId, user.id)
+    }
+  }
+
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !selectedCustomer) return
+    if (!newMessage.trim() || !selectedConversation || !user?.id) return
 
     setIsLoading(true)
-    stopTyping()
 
-    addMessage({
-      customer_id: selectedCustomer.id,
-      store_id: selectedStoreId,
-      sender_type: "store",
-      message_text: newMessage.trim(),
-    })
+    await supabaseDb.sendMessage(selectedConversation.id, user.id, "business", newMessage.trim())
 
-    const updatedMessages = getMessagesBetween(selectedCustomer.id, selectedStoreId)
-    setMessages(updatedMessages)
     setNewMessage("")
     setIsLoading(false)
   }
 
-  const handleImageSelect = (imageUrl: string) => {
-    if (!selectedCustomer) return
+  const handleImageSelect = async (imageUrl: string) => {
+    if (!selectedConversation || !user?.id) return
 
     setIsLoading(true)
 
-    addImageMessage({
-      customer_id: selectedCustomer.id,
-      store_id: selectedStoreId,
-      sender_type: "store",
-      image_url: imageUrl,
-    })
+    await supabaseDb.sendMessage(selectedConversation.id, user.id, "business", undefined, imageUrl)
 
-    const updatedMessages = getMessagesBetween(selectedCustomer.id, selectedStoreId)
-    setMessages(updatedMessages)
     setShowImageUpload(false)
     setIsLoading(false)
   }
@@ -127,47 +99,10 @@ export default function StoreDashboard() {
     }
   }
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewMessage(e.target.value)
-    if (e.target.value.trim()) {
-      startTyping()
-    } else {
-      stopTyping()
-    }
-  }
-
-  const handleStatusChange = (customerId: number, newStatus: Customer["status"]) => {
-    updateCustomerStatus(customerId, newStatus)
-    const updatedCustomers = getCustomersByStore(selectedStoreId)
-    setCustomers(updatedCustomers)
-    if (selectedCustomer?.id === customerId) {
-      setSelectedCustomer({ ...selectedCustomer, status: newStatus })
-    }
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "bronze":
-        return "bg-amber-600 text-white"
-      case "silver":
-        return "bg-gray-500 text-white"
-      case "gold":
-        return "bg-yellow-500 text-white"
-      case "vip":
-        return "bg-purple-600 text-white"
-      default:
-        return "bg-muted text-muted-foreground"
-    }
-  }
-
-  const getStatusLabel = (status: string) => {
-    return status.toUpperCase()
-  }
-
-  const filteredCustomers = customers.filter(
-    (customer) =>
-      customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      customer.email.toLowerCase().includes(searchQuery.toLowerCase()),
+  const filteredConversations = conversations.filter(
+    (conv) =>
+      conv.customer?.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      conv.customer?.email.toLowerCase().includes(searchQuery.toLowerCase()),
   )
 
   return (
@@ -176,27 +111,10 @@ export default function StoreDashboard() {
         <div className="w-80 border-r border-border flex flex-col h-screen">
           <Card className="border-b border-border rounded-none flex-shrink-0">
             <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-accent/10 rounded-lg">
-                  <Settings className="h-5 w-5 text-accent" />
-                </div>
+              <div className="flex items-center justify-between gap-3 mb-2">
                 <div className="flex-1">
-                  <Select
-                    value={selectedStoreId.toString()}
-                    onValueChange={(value) => setSelectedStoreId(Number.parseInt(value))}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {mockStores.map((store) => (
-                        <SelectItem key={store.id} value={store.id.toString()}>
-                          {store.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-sm text-muted-foreground mt-1">Store Dashboard</p>
+                  <h3 className="font-semibold text-lg">{user?.name || "Store Dashboard"}</h3>
+                  <p className="text-sm text-muted-foreground">Manage customer conversations</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Link href="/store/profile">
@@ -212,11 +130,6 @@ export default function StoreDashboard() {
                   <Link href="/">
                     <Button variant="outline" size="sm" className="flex items-center gap-1 bg-transparent">
                       <ArrowLeft className="h-3 w-3" />
-                    </Button>
-                  </Link>
-                  <Link href="/customer">
-                    <Button variant="outline" size="sm" className="flex items-center gap-1 bg-transparent">
-                      <MessageCircle className="h-3 w-3" />
                     </Button>
                   </Link>
                   <div className="w-2 h-2 bg-accent rounded-full" title="Online" />
@@ -240,41 +153,33 @@ export default function StoreDashboard() {
           <div className="flex-1 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="p-2">
-                {filteredCustomers.length === 0 ? (
+                {filteredConversations.length === 0 ? (
                   <div className="text-center py-8">
                     <Users className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
                     <p className="text-sm text-muted-foreground">No customers found</p>
                   </div>
                 ) : (
-                  filteredCustomers.map((customer) => (
+                  filteredConversations.map((conv) => (
                     <Card
-                      key={customer.id}
+                      key={conv.id}
                       className={`mb-2 cursor-pointer transition-colors hover:bg-accent/5 ${
-                        selectedCustomer?.id === customer.id ? "bg-accent/10 border-accent" : ""
+                        selectedConversation?.id === conv.id ? "bg-accent/10 border-accent" : ""
                       }`}
-                      onClick={() => setSelectedCustomer(customer)}
+                      onClick={() => setSelectedConversation(conv)}
                     >
                       <CardContent className="p-3">
                         <div className="flex items-center gap-3">
                           <Avatar className="h-10 w-10">
-                            <AvatarImage
-                              src={`/customer-profile-.jpg?key=syi9r&height=40&width=40&query=customer+profile+${customer.name}`}
-                            />
                             <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-                              {customer.name
+                              {conv.customer?.name
                                 .split(" ")
                                 .map((n) => n[0])
                                 .join("")}
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex-1 min-w-0">
-                            <p className="font-medium text-sm truncate">{customer.name}</p>
-                            <p className="text-xs text-muted-foreground truncate">{customer.email}</p>
-                            <div className="mt-1">
-                              <Badge className={`${getStatusColor(customer.status)} text-xs`}>
-                                {getStatusLabel(customer.status)}
-                              </Badge>
-                            </div>
+                            <p className="font-medium text-sm truncate">{conv.customer?.name}</p>
+                            <p className="text-xs text-muted-foreground truncate">{conv.customer?.email}</p>
                           </div>
                         </div>
                       </CardContent>
@@ -287,68 +192,23 @@ export default function StoreDashboard() {
         </div>
 
         <div className="flex-1 flex flex-col">
-          {selectedCustomer ? (
+          {selectedConversation ? (
             <>
               <Card className="border-b border-border rounded-none">
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
                       <Avatar className="h-10 w-10">
-                        <AvatarImage
-                          src={`/customer-profile-.jpg?key=syi9r&height=40&width=40&query=customer+profile+${selectedCustomer.name}`}
-                        />
                         <AvatarFallback className="bg-primary text-primary-foreground">
-                          {selectedCustomer.name
+                          {selectedConversation.customer?.name
                             .split(" ")
                             .map((n) => n[0])
                             .join("")}
                         </AvatarFallback>
                       </Avatar>
                       <div>
-                        <h2 className="font-semibold">{selectedCustomer.name}</h2>
-                        <p className="text-sm text-muted-foreground">{selectedCustomer.email}</p>
-                      </div>
-                      <div className="ml-4 p-3 bg-muted rounded-lg">
-                        <div className="grid grid-cols-3 gap-4 text-sm">
-                          {(() => {
-                            const analytics = getCustomerAnalytics(selectedCustomer.id)
-                            return (
-                              <>
-                                <div>
-                                  <p className="text-muted-foreground">Total Spend</p>
-                                  <p className="font-semibold">${analytics.total_spend}</p>
-                                </div>
-                                <div>
-                                  <p className="text-muted-foreground">Visit Frequency</p>
-                                  <p className="font-semibold">{analytics.visit_frequency}</p>
-                                </div>
-                                <div>
-                                  <p className="text-muted-foreground">Lifetime Orders</p>
-                                  <p className="font-semibold">{analytics.lifetime_purchases}</p>
-                                </div>
-                              </>
-                            )
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-right">
-                        <p className="text-sm font-medium">Customer Status</p>
-                        <Select
-                          value={selectedCustomer.status}
-                          onValueChange={(value: Customer["status"]) => handleStatusChange(selectedCustomer.id, value)}
-                        >
-                          <SelectTrigger className="w-32">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="bronze">Bronze</SelectItem>
-                            <SelectItem value="silver">Silver</SelectItem>
-                            <SelectItem value="gold">Gold</SelectItem>
-                            <SelectItem value="vip">VIP</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        <h2 className="font-semibold">{selectedConversation.customer?.name}</h2>
+                        <p className="text-sm text-muted-foreground">{selectedConversation.customer?.email}</p>
                       </div>
                     </div>
                   </div>
@@ -375,18 +235,15 @@ export default function StoreDashboard() {
                       messages.map((message) => (
                         <div
                           key={message.id}
-                          className={`flex ${message.sender_type === "store" ? "justify-end" : "justify-start"}`}
+                          className={`flex ${message.sender_type === "business" ? "justify-end" : "justify-start"}`}
                         >
                           <div
                             className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                              message.sender_type === "store"
+                              message.sender_type === "business"
                                 ? "bg-accent text-accent-foreground"
                                 : "bg-card text-card-foreground border border-border"
                             }`}
                           >
-                            {message.sender_type === "customer" && (
-                              <p className="text-xs text-muted-foreground mb-1">{message.sender_name}</p>
-                            )}
                             {message.image_url && (
                               <img
                                 src={message.image_url || "/placeholder.svg"}
@@ -397,7 +254,7 @@ export default function StoreDashboard() {
                             {message.message_text && <p className="text-sm leading-relaxed">{message.message_text}</p>}
                             <p
                               className={`text-xs mt-1 ${
-                                message.sender_type === "store" ? "text-accent-foreground/70" : "text-muted-foreground"
+                                message.sender_type === "business" ? "text-accent-foreground/70" : "text-muted-foreground"
                               }`}
                             >
                               {new Date(message.created_at).toLocaleTimeString([], {
@@ -409,8 +266,6 @@ export default function StoreDashboard() {
                         </div>
                       ))
                     )}
-
-                    <TypingIndicator isVisible={otherUserTyping} senderName={selectedCustomer.name} />
 
                     <div ref={messagesEndRef} />
                   </div>
@@ -431,9 +286,8 @@ export default function StoreDashboard() {
                     <Input
                       placeholder="Type your response..."
                       value={newMessage}
-                      onChange={handleInputChange}
+                      onChange={(e) => setNewMessage(e.target.value)}
                       onKeyPress={handleKeyPress}
-                      onBlur={stopTyping}
                       disabled={isLoading}
                       className="flex-1"
                     />

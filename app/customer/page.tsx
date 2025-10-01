@@ -9,127 +9,125 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Send, ImageIcon, MessageCircle, ArrowLeft, User, Plus, Search } from "lucide-react"
-import {
-  mockCustomers,
-  getMessagesBetween,
-  addMessage,
-  addImageMessage,
-  getConversationThreads,
-  mockStores,
-} from "@/lib/mock-db"
-import type { MessageWithSender } from "@/lib/db-types"
+import { Send, Image as ImageIcon, MessageCircle, ArrowLeft, User, Plus, Search } from "lucide-react"
 import { ImageUpload } from "@/components/image-upload"
-import { useRealtime } from "@/lib/realtime"
-import { useTypingIndicator } from "@/hooks/use-typing-indicator"
-import { TypingIndicator } from "@/components/typing-indicator"
 import { ProtectedRoute } from "@/components/protected-route"
-
-// Mock current customer (in real app, this would come from auth)
-const CURRENT_CUSTOMER_ID = 1
+import { useAuth } from "@/lib/auth-context"
+import { supabaseDb } from "@/lib/supabase-db"
+import type { Conversation, Message, BusinessProfile, Membership } from "@/lib/supabase-db"
 
 export default function CustomerMessagingPage() {
-  const [activeStoreId, setActiveStoreId] = useState<number>(1)
-  const [messages, setMessages] = useState<MessageWithSender[]>([])
+  const { user } = useAuth()
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [memberships, setMemberships] = useState<Membership[]>([])
+  const [allBusinesses, setAllBusinesses] = useState<BusinessProfile[]>([])
+  const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [showImageUpload, setShowImageUpload] = useState(false)
   const [showNewMessage, setShowNewMessage] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
-  const [filteredStores, setFilteredStores] = useState(mockStores)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const realtime = useRealtime()
 
-  const { otherUserTyping, startTyping, stopTyping } = useTypingIndicator(
-    CURRENT_CUSTOMER_ID,
-    activeStoreId,
-    "customer",
-  )
-
-  const currentCustomer = mockCustomers.find((c) => c.id === CURRENT_CUSTOMER_ID)
-  const conversationThreads = getConversationThreads(CURRENT_CUSTOMER_ID)
-  const activeStore = mockStores.find((s) => s.id === activeStoreId)
+  const activeConversation = conversations.find((c) => c.id === activeConversationId)
+  const activeBusiness = activeConversation?.business
 
   useEffect(() => {
-    if (searchQuery.trim()) {
-      const filtered = mockStores.filter((store) => store.name.toLowerCase().includes(searchQuery.toLowerCase()))
-      setFilteredStores(filtered)
-    } else {
-      setFilteredStores(mockStores)
+    if (user?.id) {
+      loadConversations()
+      loadMemberships()
+      loadAllBusinesses()
     }
-  }, [searchQuery])
+  }, [user?.id])
 
   useEffect(() => {
-    const initialMessages = getMessagesBetween(CURRENT_CUSTOMER_ID, activeStoreId)
-    setMessages(initialMessages)
+    if (activeConversationId) {
+      loadMessages(activeConversationId)
 
-    const unsubscribe = realtime.subscribe("new_message", (event) => {
-      if (event.type === "new_message" && event.customerId === CURRENT_CUSTOMER_ID && event.storeId === activeStoreId) {
-        const updatedMessages = getMessagesBetween(CURRENT_CUSTOMER_ID, activeStoreId)
-        setMessages(updatedMessages)
-      }
-    })
+      const unsubscribe = supabaseDb.subscribeToMessages(activeConversationId, (newMsg) => {
+        setMessages((prev) => [...prev, newMsg])
+        if (newMsg.sender_id !== user?.id) {
+          supabaseDb.markMessagesAsRead(activeConversationId, user?.id || "")
+        }
+      })
 
-    return unsubscribe
-  }, [realtime, activeStoreId])
+      return () => unsubscribe()
+    }
+  }, [activeConversationId, user?.id])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
+  const loadConversations = async () => {
+    if (!user?.id) return
+    const convos = await supabaseDb.getConversationsForCustomer(user.id)
+    setConversations(convos)
+    if (convos.length > 0 && !activeConversationId) {
+      setActiveConversationId(convos[0].id)
+    }
+  }
+
+  const loadMemberships = async () => {
+    if (!user?.id) return
+    const mems = await supabaseDb.getCustomerMemberships(user.id)
+    setMemberships(mems)
+  }
+
+  const loadAllBusinesses = async () => {
+    const businesses = await supabaseDb.getAllBusinesses()
+    setAllBusinesses(businesses)
+  }
+
+  const loadMessages = async (conversationId: string) => {
+    const msgs = await supabaseDb.getMessages(conversationId)
+    setMessages(msgs)
+    if (user?.id) {
+      await supabaseDb.markMessagesAsRead(conversationId, user.id)
+    }
+  }
+
   const handleSendMessage = async () => {
-    if (!newMessage.trim()) return
+    if (!newMessage.trim() || !activeConversationId || !user?.id) return
 
     setIsLoading(true)
-    stopTyping()
 
-    addMessage({
-      customer_id: CURRENT_CUSTOMER_ID,
-      store_id: activeStoreId,
-      sender_type: "customer",
-      message_text: newMessage.trim(),
-    })
+    await supabaseDb.sendMessage(activeConversationId, user.id, "customer", newMessage.trim())
 
-    const updatedMessages = getMessagesBetween(CURRENT_CUSTOMER_ID, activeStoreId)
-    setMessages(updatedMessages)
     setNewMessage("")
     setIsLoading(false)
   }
 
-  const handleImageSelect = (imageUrl: string) => {
+  const handleImageSelect = async (imageUrl: string) => {
+    if (!activeConversationId || !user?.id) return
+
     setIsLoading(true)
 
-    addImageMessage({
-      customer_id: CURRENT_CUSTOMER_ID,
-      store_id: activeStoreId,
-      sender_type: "customer",
-      image_url: imageUrl,
-    })
+    await supabaseDb.sendMessage(activeConversationId, user.id, "customer", undefined, imageUrl)
 
-    const updatedMessages = getMessagesBetween(CURRENT_CUSTOMER_ID, activeStoreId)
-    setMessages(updatedMessages)
     setShowImageUpload(false)
     setIsLoading(false)
   }
 
-  const handleStartNewConversation = (storeId: number) => {
-    setActiveStoreId(storeId)
+  const handleStartNewConversation = async (businessId: string) => {
+    if (!user?.id) return
+
+    setIsLoading(true)
+
+    await supabaseDb.createMembership(user.id, businessId)
+
+    const conversation = await supabaseDb.getOrCreateConversation(user.id, businessId)
+
+    if (conversation) {
+      await loadConversations()
+      await loadMemberships()
+      setActiveConversationId(conversation.id)
+    }
+
     setShowNewMessage(false)
     setSearchQuery("")
-
-    const existingMessages = getMessagesBetween(CURRENT_CUSTOMER_ID, storeId)
-    if (existingMessages.length === 0) {
-      const store = mockStores.find((s) => s.id === storeId)
-      addMessage({
-        customer_id: CURRENT_CUSTOMER_ID,
-        store_id: storeId,
-        sender_type: "store",
-        message_text: `Welcome to ${store?.name}! How can we assist you today?`,
-      })
-
-      const updatedMessages = getMessagesBetween(CURRENT_CUSTOMER_ID, storeId)
-      setMessages(updatedMessages)
-    }
+    setIsLoading(false)
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -139,13 +137,9 @@ export default function CustomerMessagingPage() {
     }
   }
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewMessage(e.target.value)
-    if (e.target.value.trim()) {
-      startTyping()
-    } else {
-      stopTyping()
-    }
+  const getMembershipStatus = (businessId: string): string => {
+    const membership = memberships.find((m) => m.business_id === businessId)
+    return membership?.status || "bronze"
   }
 
   const getStatusColor = (status: string) => {
@@ -163,18 +157,21 @@ export default function CustomerMessagingPage() {
     }
   }
 
-  if (!currentCustomer) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p className="text-muted-foreground">Customer not found</p>
-      </div>
-    )
-  }
+  const filteredBusinesses = allBusinesses.filter((b) => b.name.toLowerCase().includes(searchQuery.toLowerCase()))
+
+  const conversationsWithStatus = conversations.map((conv) => {
+    const lastMessage = messages.filter((m) => m.conversation_id === conv.id).pop()
+    return {
+      ...conv,
+      status: getMembershipStatus(conv.business_id),
+      last_message: lastMessage?.message_text || "Start a conversation",
+      last_message_time: lastMessage?.created_at || conv.created_at,
+    }
+  })
 
   return (
     <ProtectedRoute requiredUserType="customer">
       <div className="flex h-screen bg-background">
-        {/* Left Sidebar - Conversation Threads */}
         <div className="w-80 border-r border-border bg-sidebar flex flex-col shadow-sm h-screen">
           <div className="p-6 border-b border-sidebar-border flex-shrink-0">
             <div className="flex items-center gap-2 mb-4">
@@ -228,19 +225,20 @@ export default function CustomerMessagingPage() {
                   </div>
                   <div className="max-h-48 overflow-y-auto">
                     <div className="space-y-2">
-                      {filteredStores.slice(0, 6).map((store) => (
+                      {filteredBusinesses.slice(0, 6).map((business) => (
                         <button
-                          key={store.id}
-                          onClick={() => handleStartNewConversation(store.id)}
+                          key={business.id}
+                          onClick={() => handleStartNewConversation(business.id)}
                           className="w-full p-3 text-left rounded-lg hover:bg-sidebar-primary/30 transition-colors border border-sidebar-border/50 bg-background/30"
+                          disabled={isLoading}
                         >
-                          <div className="font-semibold text-sm truncate flex-1 mr-2">{store.name}</div>
-                          <div className="text-xs text-muted-foreground truncate">{store.description}</div>
+                          <div className="font-semibold text-sm truncate flex-1 mr-2">{business.name}</div>
+                          <div className="text-xs text-muted-foreground truncate">{business.description}</div>
                         </button>
                       ))}
-                      {filteredStores.length > 6 && (
+                      {filteredBusinesses.length > 6 && (
                         <div className="text-xs text-muted-foreground text-center py-2">
-                          +{filteredStores.length - 6} more brands...
+                          +{filteredBusinesses.length - 6} more brands...
                         </div>
                       )}
                     </div>
@@ -253,36 +251,36 @@ export default function CustomerMessagingPage() {
           <div className="flex-1 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="p-4 space-y-3">
-                {conversationThreads.map((thread) => (
+                {conversationsWithStatus.map((conv) => (
                   <button
-                    key={thread.store_id}
-                    onClick={() => setActiveStoreId(thread.store_id)}
+                    key={conv.id}
+                    onClick={() => setActiveConversationId(conv.id)}
                     className={`w-full p-4 rounded-xl text-left transition-all duration-200 shadow-sm hover:shadow-md animate-fade-in ${
-                      activeStoreId === thread.store_id
+                      activeConversationId === conv.id
                         ? "bg-primary text-primary-foreground shadow-lg scale-[1.02]"
                         : "hover:bg-sidebar-primary bg-card border border-sidebar-border"
                     }`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-semibold text-sm truncate flex-1 mr-2">{thread.store_name}</span>
-                      <Badge className={`${getStatusColor(thread.status)} shadow-sm flex-shrink-0`} variant="secondary">
-                        {thread.status.toUpperCase()}
+                      <span className="font-semibold text-sm truncate flex-1 mr-2">{conv.business?.name}</span>
+                      <Badge className={`${getStatusColor(conv.status)} shadow-sm flex-shrink-0`} variant="secondary">
+                        {conv.status.toUpperCase()}
                       </Badge>
                     </div>
                     <p
                       className={`text-xs truncate leading-relaxed mb-2 ${
-                        activeStoreId === thread.store_id ? "text-primary-foreground/80" : "text-muted-foreground"
+                        activeConversationId === conv.id ? "text-primary-foreground/80" : "text-muted-foreground"
                       }`}
                     >
-                      {thread.last_message}
+                      {conv.last_message}
                     </p>
-                    {thread.last_message_time && (
+                    {conv.last_message_time && (
                       <p
                         className={`text-xs font-medium ${
-                          activeStoreId === thread.store_id ? "text-primary-foreground/60" : "text-muted-foreground"
+                          activeConversationId === conv.id ? "text-primary-foreground/60" : "text-muted-foreground"
                         }`}
                       >
-                        {new Date(thread.last_message_time).toLocaleDateString()}
+                        {new Date(conv.last_message_time).toLocaleDateString()}
                       </p>
                     )}
                   </button>
@@ -293,17 +291,16 @@ export default function CustomerMessagingPage() {
         </div>
 
         <div className="flex-1 flex flex-col">
-          {/* Chat Header */}
           <Card className="border-b border-border rounded-none shadow-sm bg-card/50 backdrop-blur-sm">
             <div className="flex items-center gap-4 p-6">
               <Avatar className="h-12 w-12 shadow-md">
                 <AvatarFallback className="bg-primary text-primary-foreground font-semibold text-lg">
-                  {activeStore?.name.charAt(0)}
+                  {activeBusiness?.name.charAt(0)}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1">
-                <h1 className="font-bold text-xl text-foreground">{activeStore?.name}</h1>
-                <p className="text-sm text-muted-foreground leading-relaxed">{activeStore?.description}</p>
+                <h1 className="font-bold text-xl text-foreground">{activeBusiness?.name}</h1>
+                <p className="text-sm text-muted-foreground leading-relaxed">{activeBusiness?.description}</p>
               </div>
               <div className="flex items-center gap-3 text-muted-foreground">
                 <MessageCircle className="h-5 w-5" />
@@ -313,7 +310,6 @@ export default function CustomerMessagingPage() {
             </div>
           </Card>
 
-          {/* Messages Area */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             <ScrollArea className="flex-1 p-6 bg-gradient-to-b from-background to-muted/20">
               <div className="space-y-6 max-w-4xl mx-auto">
@@ -331,7 +327,7 @@ export default function CustomerMessagingPage() {
                   <div className="text-center py-12 animate-fade-in">
                     <MessageCircle className="h-16 w-16 text-muted-foreground mx-auto mb-6 opacity-50" />
                     <p className="text-muted-foreground text-lg">
-                      No messages yet. Start a conversation with {activeStore?.name}!
+                      No messages yet. Start a conversation with {activeBusiness?.name}!
                     </p>
                   </div>
                 ) : (
@@ -348,11 +344,6 @@ export default function CustomerMessagingPage() {
                             : "bg-card text-card-foreground border border-border"
                         }`}
                       >
-                        {message.sender_type === "store" && (
-                          <p className="text-xs text-muted-foreground mb-2 font-medium truncate">
-                            {message.sender_name}
-                          </p>
-                        )}
                         {message.image_url && (
                           <img
                             src={message.image_url || "/placeholder.svg"}
@@ -361,9 +352,7 @@ export default function CustomerMessagingPage() {
                           />
                         )}
                         {message.message_text && (
-                          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-                            {message.message_text}
-                          </p>
+                          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.message_text}</p>
                         )}
                         <p
                           className={`text-xs mt-2 font-medium ${
@@ -380,13 +369,11 @@ export default function CustomerMessagingPage() {
                   ))
                 )}
 
-                <TypingIndicator isVisible={otherUserTyping} senderName={`${activeStore?.name} Support`} />
                 <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
           </div>
 
-          {/* Message Input */}
           <Card className="border-t border-border rounded-none shadow-lg bg-card/80 backdrop-blur-sm">
             <div className="flex items-center gap-3 p-6 max-w-4xl mx-auto">
               <Button
@@ -398,17 +385,16 @@ export default function CustomerMessagingPage() {
                 <ImageIcon className="h-4 w-4" />
               </Button>
               <Input
-                placeholder={`Message ${activeStore?.name}...`}
+                placeholder={`Message ${activeBusiness?.name}...`}
                 value={newMessage}
-                onChange={handleInputChange}
+                onChange={(e) => setNewMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
-                onBlur={stopTyping}
-                disabled={isLoading}
+                disabled={isLoading || !activeConversationId}
                 className="flex-1 bg-input/50 border-border focus:bg-background transition-colors"
               />
               <Button
                 onClick={handleSendMessage}
-                disabled={isLoading || !newMessage.trim()}
+                disabled={isLoading || !newMessage.trim() || !activeConversationId}
                 className="shrink-0 bg-accent hover:bg-accent/90 text-accent-foreground shadow-md hover:shadow-lg transition-all duration-200"
               >
                 <Send className="h-4 w-4" />

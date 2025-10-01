@@ -5,11 +5,11 @@ import type React from "react"
 import { useAuth, type UserType } from "@/lib/auth-context"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
-import { Loader2, Sparkles } from "lucide-react"
+import { Loader as Loader2, Sparkles } from "lucide-react"
 
 interface ProtectedRouteProps {
   children: React.ReactNode
-  requiredUserType: UserType
+  requiredUserType: UserType | "brand"
 }
 
 export function ProtectedRoute({ children, requiredUserType }: ProtectedRouteProps) {
@@ -18,12 +18,11 @@ export function ProtectedRoute({ children, requiredUserType }: ProtectedRoutePro
 
   useEffect(() => {
     if (!loading) {
+      const normalizedRequired = requiredUserType === "brand" ? "business" : requiredUserType
       if (!user) {
-        // Redirect to appropriate auth page
-        const authPath = requiredUserType === "customer" ? "/customer/auth" : "/store/auth"
+        const authPath = normalizedRequired === "customer" ? "/customer/auth" : "/store/auth"
         router.push(authPath)
-      } else if (user.type !== requiredUserType) {
-        // User is logged in but wrong type, redirect to their appropriate dashboard
+      } else if (user.type !== normalizedRequired) {
         const redirectPath = user.type === "customer" ? "/customer" : "/store"
         router.push(redirectPath)
       }
@@ -48,8 +47,9 @@ export function ProtectedRoute({ children, requiredUserType }: ProtectedRoutePro
     )
   }
 
-  if (!user || user.type !== requiredUserType) {
-    return null // Will redirect via useEffect
+  const normalizedRequired = requiredUserType === "brand" ? "business" : requiredUserType
+  if (!user || user.type !== normalizedRequired) {
+    return null
   }
 
   return <>{children}</>

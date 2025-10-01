@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth, type UserType } from "@/lib/auth-context"
-import { Loader2, Sparkles, ArrowLeft } from "lucide-react"
+import { Loader as Loader2, Sparkles, ArrowLeft } from "lucide-react"
 
 interface AuthFormProps {
   type: UserType
@@ -34,23 +34,26 @@ export function AuthForm({ type, onSuccess }: AuthFormProps) {
     setError("")
 
     try {
-      let success = false
       if (isLogin) {
-        success = await login(formData.email, formData.password, type)
+        const result = await login(formData.email, formData.password)
+        if (result.success) {
+          onSuccess()
+        } else {
+          setError(result.error || "Authentication failed. Please try again.")
+        }
       } else {
-        success = await signup(
+        const result = await signup(
           formData.email,
           formData.password,
           formData.name,
           type,
-          type === "brand" ? formData.brandName : undefined,
+          type === "business" ? formData.brandName : undefined,
         )
-      }
-
-      if (success) {
-        onSuccess()
-      } else {
-        setError("Authentication failed. Please try again.")
+        if (result.success) {
+          onSuccess()
+        } else {
+          setError(result.error || "Authentication failed. Please try again.")
+        }
       }
     } catch (err) {
       setError("An error occurred. Please try again.")
@@ -137,7 +140,7 @@ export function AuthForm({ type, onSuccess }: AuthFormProps) {
                   />
                 </div>
 
-                {type === "brand" && (
+                {type === "business" && (
                   <div className="space-y-2">
                     <Label htmlFor="brandName">Brand Name</Label>
                     <Input

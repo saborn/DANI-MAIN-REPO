@@ -10,5 +10,5 @@ export default function StoreAuthPage() {
     router.push("/store")
   }
 
-  return <AuthForm type="brand" onSuccess={handleSuccess} />
+  return <AuthForm type="business" onSuccess={handleSuccess} />
 }
